@@ -1,5 +1,5 @@
 /* WaterBreak service worker: offline app shell + notification clicks. */
-const CACHE = 'waterbreak-v4';
+const CACHE = 'waterbreak-v5';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon.svg',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 
@@ -15,7 +15,7 @@ self.addEventListener('fetch', e => {
   const isShell = url.origin === location.origin || url.hostname === 'unpkg.com';
   if (!isShell) return; // map tiles, APIs: straight to network
   // network-first for our own files so updates arrive; fall back to cache offline
-  e.respondWith(fetch(e.request).then(r => {
+  e.respondWith(fetch(e.request, { cache: 'no-cache' }).then(r => {
     if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
     return r;
   }).catch(() => caches.match(e.request, { ignoreSearch: true })));
