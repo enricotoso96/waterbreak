@@ -311,12 +311,12 @@ function tick() {
   if (settings.share && settings.shareEvery > 0 && now - run.lastShare >= settings.shareEvery * 60000) { run.lastShare = now; friendsPublish('progress'); }
   if (now % 10000 < 1000) persistRun();
 }
-function setPaused(kind, v) {
+function setPaused(kind, v, since = Date.now()) {
   if (!run) return;
   const wasPaused = run.manual || run.auto;
   run[kind] = v;
   const isPaused = run.manual || run.auto;
-  if (!wasPaused && isPaused) run.pauses.push({ s: Date.now(), e: null, auto: kind === 'auto' });
+  if (!wasPaused && isPaused) run.pauses.push({ s: since, e: null, auto: kind === 'auto' });
   if (wasPaused && !isPaused) { const last = run.pauses[run.pauses.length - 1]; if (last && !last.e) last.e = Date.now(); run.lastPt = null; run.win = []; }
   if (kind === 'manual') { run.slowSince = null; if (!v) run.auto = false; }
   renderControls(); renderStats();
@@ -342,7 +342,12 @@ function trackFix(p) {
     const thr = settings.pauseSpeedKmh / 3.6;
     if (spd < thr) {
       run.slowSince = run.slowSince || p.t;
-      if (!run.auto && p.t - run.slowSince >= settings.pauseDelay * 1000) { setPaused('auto', true); toast('Auto-paused'); }
+      if (!run.auto && p.t - run.slowSince >= settings.pauseDelay * 1000) {
+        // the stop really began at slowSince: move that detection time from moving to paused
+        const back = Math.max(0, Math.min(Date.now() - run.slowSince, run.moving));
+        run.moving -= back; run.paused += back;
+        setPaused('auto', true, Date.now() - back); toast('Auto-paused');
+      }
     } else {
       run.slowSince = null;
       if (run.auto && spd > thr * 1.2) { setPaused('auto', false); toast('Resumed'); }
