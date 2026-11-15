@@ -55,9 +55,56 @@
       <details id="dest-steps-wrap"><summary>All directions</summary><ol id="dest-steps"></ol></details>
     </div>
 
+    <div id="resume-card" class="resume-card hidden" role="alertdialog" aria-label="Unfinished run">
+      <div class="resume-title">⏱ Unfinished run</div>
+      <p id="resume-text"></p>
+      <div class="resume-actions">
+        <button id="resume-go" class="btn primary small">Resume</button>
+        <button id="resume-save" class="btn small">Save &amp; finish</button>
+        <button id="resume-discard" class="btn danger small">Discard</button>
+      </div>
+    </div>
+
+    <!-- Full-screen stats (toggle with Map | Stats) -->
+    <div id="bigstats" class="bigstats" aria-label="Run stats">
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+          <circle cx="100" cy="100" r="88" class="ring-bg"/>
+          <circle cx="100" cy="100" r="88" class="ring-fg" id="ring-fg" pathLength="100" stroke-dasharray="0 100"/>
+        </svg>
+        <div class="ring-center">
+          <b id="b-dist">0.00</b>
+          <span id="b-dist-sub">km</span>
+        </div>
+      </div>
+      <div id="b-status" class="b-status">Set a goal to see how you are doing</div>
+      <div class="b-grid">
+        <div><b id="b-time">0:00</b><span>Total time</span></div>
+        <div><b id="b-moving">0:00</b><span>Moving time</span></div>
+        <div><b id="b-cur">–:––</b><span>Current /km</span></div>
+        <div><b id="b-avg-m">–:––</b><span>Avg /km moving</span></div>
+        <div><b id="b-avg-e">–:––</b><span>Avg /km with pauses</span></div>
+        <div><b id="b-speed">–</b><span>km/h moving</span></div>
+        <div><b id="b-proj">—</b><span id="b-proj-l">Projected finish</span></div>
+        <div><b id="b-need">—</b><span>Needed /km to hit goal</span></div>
+      </div>
+      <div id="b-dest" class="b-dest hidden"></div>
+    </div>
+
     <div id="sheet" class="sheet">
       <div class="sheet-handle" id="sheet-handle" role="button" aria-label="Expand stats"></div>
+      <div class="sheet-top">
+        <div class="seg" role="tablist" aria-label="Run view">
+          <button data-mode="map" class="active" role="tab">Map</button>
+          <button data-mode="stats" role="tab">Stats</button>
+        </div>
+        <button id="btn-goal" class="goal-chip">🎯 Set goal</button>
+      </div>
       <div id="state-banner" class="state-banner hidden"></div>
+      <div id="goal-box" class="goal-box hidden">
+        <div class="goal-bar"><i id="goal-bar-fill"></i></div>
+        <div class="goal-line"><span id="goal-dist-line"></span><span id="goal-pace-line"></span></div>
+      </div>
       <div class="stats-main">
         <div class="stat big"><b id="s-dist">0.00</b><span>km</span></div>
         <div class="stat big"><b id="s-time">0:00</b><span>total time</span></div>
@@ -120,6 +167,7 @@
       <div class="label">Connected</div>
       <ul id="friend-list" class="friend-list"></ul>
       <p id="friend-empty" class="hint">No friends yet.</p>
+      <button id="btn-nudge-all" class="btn wide hidden">🏃 Invite everyone to go running</button>
     </div>
 
     <div class="card">
@@ -169,6 +217,8 @@
         <input id="set-pause-speed" type="range" min="1" max="7" step="0.5"></label>
       <label class="setting col"><span>…for at least <b id="pause-delay-val">6 s</b></span>
         <input id="set-pause-delay" type="range" min="3" max="20" step="1"></label>
+      <label class="setting"><span>Voice updates every km &amp; goal milestones</span><input id="set-voice" type="checkbox" class="switch"></label>
+      <label class="setting"><span>Goal milestone notifications (25/50/75/100%)</span><input id="set-milestones" type="checkbox" class="switch"></label>
       <label class="setting"><span>Keep screen on while running</span><input id="set-keepawake" type="checkbox" class="switch"></label>
       <label class="setting"><span>Default pace for estimates</span>
         <select id="set-default-pace">
@@ -222,10 +272,51 @@
   </div>
 </div>
 
+<!-- Note to a friend -->
+<div id="note-modal" class="modal hidden" role="dialog" aria-label="Send a note">
+  <div class="modal-card">
+    <div class="modal-head"><h2 id="note-title">Send a note</h2><button class="icon-btn" data-close aria-label="Close">✕</button></div>
+    <div class="note-quick">
+      <button data-kind="nudge">🏃 Go for a run!</button>
+      <button data-kind="cheer">📣 You’ve got this!</button>
+      <button data-kind="congrats">🎉 Congrats on your run!</button>
+    </div>
+    <form id="note-form">
+      <textarea id="note-text" maxlength="200" rows="3" placeholder="Or write your own message…"></textarea>
+      <button class="btn primary wide" type="submit" style="text-align:center">Send</button>
+    </form>
+  </div>
+</div>
+
+<!-- Goal -->
+<div id="goal-modal" class="modal hidden" role="dialog" aria-label="Run goal">
+  <div class="modal-card">
+    <div class="modal-head"><h2>Run goal</h2><button class="icon-btn" data-close aria-label="Close">✕</button></div>
+    <div class="label">Distance</div>
+    <div class="presets" id="goal-dist-presets">
+      <button data-km="0">None</button><button data-km="3">3 km</button><button data-km="5">5 km</button>
+      <button data-km="10">10 km</button><button data-km="21.1">Half</button><button data-km="42.2">Marathon</button>
+    </div>
+    <label class="setting"><span>Custom (km)</span><input id="goal-dist" type="number" inputmode="decimal" min="0" step="0.1" placeholder="e.g. 7.5"></label>
+    <div class="label" style="margin-top:12px">Target speed (optional)</div>
+    <div class="pace-row">
+      <label><span>Pace (min/km)</span><input id="goal-pace" inputmode="numeric" placeholder="5:30"></label>
+      <span class="or">=</span>
+      <label><span>Speed (km/h)</span><input id="goal-speed" type="number" inputmode="decimal" step="0.1" placeholder="10.9"></label>
+    </div>
+    <p id="goal-summary" class="hint"></p>
+    <div class="rd-actions" style="margin-top:14px">
+      <button id="goal-clear" class="btn small">Clear goal</button>
+      <button id="goal-save" class="btn primary small">Save goal</button>
+    </div>
+  </div>
+</div>
+
 <!-- Run detail -->
 <div id="run-modal" class="modal hidden" role="dialog" aria-label="Run details">
   <div class="modal-card tall">
     <div class="modal-head"><h2 id="rd-title">Run</h2><button class="icon-btn" data-close aria-label="Close">✕</button></div>
+    <div id="rd-goal" class="rd-goal hidden"></div>
     <div id="rd-map" class="rd-map"></div>
     <div id="rd-stats" class="rd-stats"></div>
     <div class="rd-actions">

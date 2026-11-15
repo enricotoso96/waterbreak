@@ -53,6 +53,7 @@ const DEFAULTS = {
   alertDistance: 30, sound: 'chime', volume: 0.8, vibrate: true, alertRunOnly: true,
   autoPause: true, pauseSpeedKmh: 3, pauseDelay: 6, keepAwake: true, defaultPace: 360,
   name: '', share: true, shareEvery: 5, notifyFriends: true,
+  voice: true, milestones: true, goal: { dist: 0, pace: 0 }, // goal.dist in m, goal.pace in s/km
 };
 const settings = { ...DEFAULTS, ...LS.get('wb_settings', {}) };
 const saveSettings = () => LS.set('wb_settings', settings);
@@ -285,12 +286,14 @@ let ticker = null;
 function newRun() {
   const now = Date.now();
   return { id: now.toString(36), start: now, end: null, pts: [], dist: 0, moving: 0, paused: 0, pauses: [],
-    manual: false, auto: false, lastTick: now, lastPt: null, win: [], slowSince: null, fountainsSeen: [], lastShare: now };
+    manual: false, auto: false, lastTick: now, lastPt: null, win: [], slowSince: null, fountainsSeen: [], lastShare: now,
+    goal: { ...(settings.goal || { dist: 0, pace: 0 }) }, marks: [], kmSaid: 0 };
 }
 function startRun() {
-  unlockAudio();
+  unlockAudio(); unlockSpeech();
   if (notifSupported() && Notification.permission === 'default') requestNotif();
   run = newRun();
+  if (hasGoal(run.goal)) speak(`Run started. Goal: ${spokenGoal(run.goal)}.`);
   geo.start();
   if (geo.last && Date.now() - geo.last.t < 10000) { run.lastPt = geo.last; addPt(geo.last); }
   trackLine.setLatLngs(run.pts.map(p => [p[0], p[1]]));
@@ -304,12 +307,13 @@ function startRun() {
 }
 function tick() {
   if (!run) return;
-  const now = Date.now(), dt = Math.min(now - run.lastTick, 60000);
+  const now = Date.now(), dt = Math.max(0, now - run.lastTick);
   run.lastTick = now;
   if (run.manual || run.auto) run.paused += dt; else run.moving += dt;
+  checkMilestones();
   renderStats();
   if (settings.share && settings.shareEvery > 0 && now - run.lastShare >= settings.shareEvery * 60000) { run.lastShare = now; friendsPublish('progress'); }
-  if (now % 10000 < 1000) persistRun();
+  if (!run.savedAt || now - run.savedAt > 5000) { run.savedAt = now; persistRun(); }
 }
 function setPaused(kind, v, since = Date.now()) {
   if (!run) return;
@@ -364,38 +368,75 @@ function finishRun() {
   if (!run) return;
   if (!confirm('Finish and save this run?')) return;
   tick();
-  const now = Date.now();
+  finalizeRun(Date.now());
+}
+function finalizeRun(now) {
   const last = run.pauses[run.pauses.length - 1]; if (last && !last.e) last.e = now;
   run.end = now;
   clearInterval(ticker); ticker = null;
   const saved = { id: run.id, start: run.start, end: run.end, dist: Math.round(run.dist), moving: run.moving, paused: run.paused,
-    pauses: run.pauses.map(p => ({ s: p.s, e: p.e, auto: p.auto })), pts: run.pts, fountains: (run.fountainsSeen || []).length };
+    pauses: run.pauses.map(p => ({ s: p.s, e: p.e, auto: p.auto })), pts: run.pts, fountains: (run.fountainsSeen || []).length,
+    goal: hasGoal(run.goal) ? run.goal : null };
   friendsPublish('finish', saved);
+  let kept = false;
   if (saved.dist > 20 || saved.moving > 60000) {
     const runs = LS.get('wb_runs', []); runs.unshift(saved);
     if (!LS.set('wb_runs', runs)) { runs.pop(); LS.set('wb_runs', runs); }
-    toast(`Saved: ${fmtKm(saved.dist)} km in ${fmtDur(saved.moving + saved.paused)}`);
+    kept = true;
   } else toast('Run too short — not saved');
+  const res = goalResult(saved);
+  speak(`Run complete. ${spokenKm(saved.dist)} in ${spokenDur(saved.moving + saved.paused)}. Average pace ${spokenPace(paceOf(saved.dist, saved.moving))}.` +
+    (res ? (res.hit ? ' Congratulations, you hit your goal!' : ' You did not quite hit your goal this time. Keep at it!') : ''));
   run = null; LS.del('wb_active');
   setWake(false);
   renderControls(); renderStats(); renderHistory();
+  if (kept) openRun(saved.id); // end-of-run summary
 }
 function persistRun() {
   if (!run) return;
   const { win, lastPt, ...rest } = run;
   LS.set('wb_active', rest);
 }
+// A run is saved to the device every few seconds. If the app was closed mid-run we offer
+// Resume / Save / Discard on the next open. A quick reload (< 90 s) just carries on.
+let recovered = null;
 function restoreRun() {
   const r = LS.get('wb_active', null);
   if (!r) return;
-  if (Date.now() - r.lastTick > 6 * 3600e3) { LS.del('wb_active'); return; }
-  run = { ...newRun(), ...r, win: [], lastPt: null };
-  const gap = Date.now() - run.lastTick;
-  if (gap > 0) { if (run.manual || run.auto) run.paused += gap; else run.moving += gap; run.lastTick = Date.now(); }
-  trackLine.setLatLngs(run.pts.map(p => [p[0], p[1]]));
-  ticker = setInterval(tick, 1000);
-  toast('Restored your run in progress');
+  const gap = Date.now() - r.lastTick;
+  if (gap > 3 * 864e5) { LS.del('wb_active'); return; }
+  if (gap < 90000) { resumeRun(r, false); toast('Restored your run in progress'); return; }
+  recovered = r;
+  const card = $('#resume-card');
+  $('#resume-text').textContent = `Unfinished run from ${new Date(r.start).toLocaleDateString([], { weekday: 'short' })} ${fmtClock(r.start)}: ` +
+    `${fmtKm(r.dist)} km in ${fmtDur(r.moving + r.paused)}. The app was closed ${fmtDur(gap)} ago.`;
+  card.classList.remove('hidden');
 }
+function resumeRun(r, gapAsPause) {
+  $('#resume-card').classList.add('hidden'); recovered = null;
+  run = { ...newRun(), ...r, win: [], lastPt: null };
+  const now = Date.now(), gap = Math.max(0, now - run.lastTick);
+  if (gapAsPause) {
+    // time while the app was closed counts as a pause (no GPS was recorded)
+    if (!(run.manual || run.auto)) run.pauses.push({ s: run.lastTick, e: now, auto: true, closed: true });
+    run.paused += gap;
+  } else if (run.manual || run.auto) run.paused += gap; else run.moving += gap;
+  run.lastTick = now;
+  trackLine.setLatLngs(run.pts.map(p => [p[0], p[1]]));
+  clearInterval(ticker); ticker = setInterval(tick, 1000);
+  geo.start(); setWake(true);
+  renderControls(); renderStats(); persistRun();
+}
+$('#resume-go').onclick = () => { unlockAudio(); unlockSpeech(); resumeRun(recovered, true); toast('Run resumed — the time the app was closed counts as a pause'); };
+$('#resume-save').onclick = () => {
+  const r = recovered; $('#resume-card').classList.add('hidden'); recovered = null;
+  run = { ...newRun(), ...r, win: [], lastPt: null };
+  finalizeRun(r.lastTick); // ends at the last moment the app was tracking
+};
+$('#resume-discard').onclick = () => {
+  if (!confirm('Discard this unfinished run?')) return;
+  recovered = null; LS.del('wb_active'); $('#resume-card').classList.add('hidden'); toast('Run discarded');
+};
 
 // ---------- stats rendering ----------
 function renderStats() {
@@ -417,6 +458,7 @@ function renderStats() {
   const b = $('#state-banner');
   if (run && (run.manual || run.auto)) { b.textContent = run.manual ? 'PAUSED' : 'AUTO-PAUSED — start moving to resume'; b.classList.remove('hidden'); }
   else b.classList.add('hidden');
+  renderGoal(r, elapsed, cur);
 }
 function renderControls() {
   $('#btn-start').classList.toggle('hidden', !!run);
@@ -453,7 +495,7 @@ async function setDestination(ll, name) {
 function clearDestination() {
   dest = null; routeLine.setLatLngs([]);
   if (destMarker) { destMarker.remove(); destMarker = null; }
-  $('#dest-card').classList.add('hidden'); $('#btn-dest').classList.remove('on');
+  $('#dest-card').classList.add('hidden'); $('#btn-dest').classList.remove('on'); $('#b-dest').classList.add('hidden');
 }
 async function fetchRoute(from) {
   if (!dest) return;
@@ -517,6 +559,8 @@ function updateDestination(p) {
   $('#dest-eta').textContent = fmtDur(secs * 1000);
   $('#dest-arrive').textContent = fmtClock(Date.now() + secs * 1000);
   $('#dest-next').textContent = next || `${fmtDist(straight)} straight line ${arrow(bearing(p, dest))}`;
+  $('#b-dest').textContent = `🏁 ${dest.name}: ${fmtDist(remaining)} · ~${fmtDur(secs * 1000)} · ${next || arrow(bearing(p, dest))}`;
+  $('#b-dest').classList.remove('hidden');
   if (!dest.arrived && straight < 25) {
     dest.arrived = true; playSound(); notify('🏁 Destination reached', dest.name, 'dest'); toast('You have arrived!');
   }
@@ -573,7 +617,8 @@ function renderHistory() {
   $('#history-list').replaceChildren(...runs.map(r => {
     const li = document.createElement('li'); li.className = 'run-item';
     const d = new Date(r.start);
-    li.innerHTML = `<div class="ri-top"><span>${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtClock(r.start)}</span><span>💧 ${r.fountains || 0}</span></div>
+    const gr = goalResult(r);
+    li.innerHTML = `<div class="ri-top"><span>${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} · ${fmtClock(r.start)}</span><span>${gr ? (gr.hit ? '🎯✓ ' : '🎯✗ ') : ''}💧 ${r.fountains || 0}</span></div>
       <div class="ri-stats"><div><b>${fmtKm(r.dist)}</b><span>km</span></div><div><b>${fmtDur(r.moving + r.paused)}</b><span>total</span></div><div><b>${fmtPace(paceOf(r.dist, r.moving))}</b><span>moving /km</span></div><div><b>${fmtSpeed(r.dist, r.moving + r.paused)}</b><span>km/h overall</span></div></div>`;
     li.onclick = () => openRun(r.id);
     return li;
@@ -593,6 +638,12 @@ function openRun(id) {
     [fmtClock(r.start) + '–' + fmtClock(r.end), 'Start – finish'], [String(r.fountains || 0), 'Fountains passed'],
   ];
   $('#rd-stats').innerHTML = cells.map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('');
+  const gr = goalResult(r), box = $('#rd-goal');
+  box.classList.toggle('hidden', !gr);
+  if (gr) {
+    box.className = 'rd-goal ' + (gr.hit ? 'hit' : 'miss');
+    box.innerHTML = `<div class="gt">${gr.hit ? '🎉 Goal achieved!' : '🎯 Goal not reached — so close!'}</div><ul>${gr.lines.map(l => `<li>${l}</li>`).join('')}</ul>`;
+  }
   openModal('#run-modal');
   setTimeout(() => {
     if (!rdMap) {
@@ -657,7 +708,8 @@ function friendsPublish(kind, saved) {
   } else if (kind === 'finish' && saved) {
     const el = saved.moving + saved.paused;
     ntfyPost(runTopic(myCode), `${name} finished a run 🏁`,
-      `${fmtKm(saved.dist)} km in ${fmtDur(el)} (moving ${fmtDur(saved.moving)}) · ${fmtPace(paceOf(saved.dist, saved.moving))} /km moving, ${fmtPace(paceOf(saved.dist, el))} /km overall · ${fmtSpeed(saved.dist, saved.moving)} km/h · ${saved.pauses.length} stops · 💧 ${saved.fountains}`,
+      `${fmtKm(saved.dist)} km in ${fmtDur(el)} (moving ${fmtDur(saved.moving)}) · ${fmtPace(paceOf(saved.dist, saved.moving))} /km moving, ${fmtPace(paceOf(saved.dist, el))} /km overall · ${fmtSpeed(saved.dist, saved.moving)} km/h · ${saved.pauses.length} stops · 💧 ${saved.fountains}` +
+      (goalResult(saved) ? ` · 🎯 goal ${goalLabel(saved.goal)} ${goalResult(saved).hit ? '✓ achieved' : '✗ missed'}` : ''),
       ['wbfinish']);
   }
 }
@@ -680,13 +732,28 @@ function handleMsg(m) {
     const code = normCode(ctag.slice(2));
     if (code === myCode || code.length !== 10) return;
     const name = (m.title || 'Friend').slice(0, 30);
+    const isNote = tags.includes('wbnote');
     const f = friends.find(x => x.code === code);
     if (!f) {
       friends.push({ code, name }); LS.set('wb_friends', friends); renderFriends();
-      addFeed({ id: m.id, time: m.time, title: `${name} connected with you`, message: 'You now follow each other’s runs.', code });
-      if (fresh) { toast(`${name} added you as a friend`); notify('👋 New WaterBreak friend', `${name} connected with you`, 'hello-' + code); }
+      if (!isNote) {
+        addFeed({ id: m.id, time: m.time, title: `${name} connected with you`, message: 'You now follow each other’s runs.', code, kind: 'hello' });
+        if (fresh) { toast(`${name} added you as a friend`); notify('👋 New WaterBreak friend', `${name} connected with you`, 'hello-' + code); }
+      }
       setTimeout(connectFriends, 300);
     } else if (f.name !== name) { f.name = name; LS.set('wb_friends', friends); renderFriends(); }
+    if (isNote && !feed.some(x => x.id === m.id)) {
+      const kind = (tags.find(t => t.startsWith('k-')) || 'k-note').slice(2);
+      const head = { nudge: 'wants you to go running 🏃', cheer: 'is cheering you on 📣', congrats: 'congratulates you 🎉' }[kind] || 'sent you a note 💬';
+      const text = String(m.message || '').slice(0, 280);
+      addFeed({ id: m.id, time: m.time, title: `${name} ${head}`, message: text, code, kind: 'note' });
+      if (fresh) {
+        notify(`${name} ${head}`, text, 'note-' + code);
+        playSound('friend'); toast(`${name}: ${text}`, 5000);
+        if (run) speak(`${name} says: ${text}`);
+        if (!$('#view-friends').classList.contains('active')) $('#friends-badge').classList.remove('hidden');
+      }
+    }
     return;
   }
   const f = friends.find(x => runTopic(x.code) === m.topic); if (!f) return;
@@ -696,7 +763,8 @@ function handleMsg(m) {
   if (tags.includes('wbprogress')) f.live = f.live || m.time;
   const nm = (m.title || '').match(/^(.*?) (started|is running|finished)/); if (nm && nm[1]) f.name = nm[1].slice(0, 30);
   LS.set('wb_friends', friends); renderFriends();
-  addFeed({ id: m.id, time: m.time, title: m.title || '', message: m.message || '', code: f.code });
+  const kind = tags.includes('wbstart') ? 'start' : tags.includes('wbfinish') ? 'finish' : tags.includes('wbprogress') ? 'progress' : '';
+  addFeed({ id: m.id, time: m.time, title: m.title || '', message: m.message || '', code: f.code, kind });
   if (fresh && settings.notifyFriends && (tags.includes('wbstart') || tags.includes('wbfinish'))) {
     notify(m.title || 'Friend update', m.message || '', 'friend-' + f.code);
     playSound('friend');
@@ -714,12 +782,23 @@ function renderFeed() {
     const t = document.createElement('div'); t.className = 'ft'; t.textContent = x.title;
     const msg = document.createElement('div'); msg.className = 'fm'; msg.textContent = x.message;
     const w = document.createElement('div'); w.className = 'fw'; w.textContent = new Date(x.time * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    li.append(t, msg, w); return li;
+    li.append(t, msg, w);
+    const f = friends.find(y => y.code === x.code);
+    const act = { start: 'cheer', progress: 'cheer', finish: 'congrats', note: 'reply' }[x.kind];
+    if (f && act) {
+      const row = document.createElement('div'); row.className = 'feed-actions';
+      const b = document.createElement('button'); b.className = 'btn small';
+      b.textContent = act === 'cheer' ? '📣 Cheer' : act === 'congrats' ? '🎉 Congratulate' : '💬 Reply';
+      b.onclick = () => act === 'reply' ? openNote(f) : sendNote(f, act, NOTE_PRESETS[act]);
+      row.append(b); li.append(row);
+    }
+    return li;
   }));
 }
 function renderFriends() {
   $('#my-code').textContent = prettyCode(myCode);
   $('#friend-empty').classList.toggle('hidden', friends.length > 0);
+  $('#btn-nudge-all').classList.toggle('hidden', friends.length === 0);
   $('#friend-list').replaceChildren(...friends.map(f => {
     const li = document.createElement('li');
     const left = document.createElement('div');
@@ -730,9 +809,12 @@ function renderFriends() {
     c.append(a);
     left.append(n, c);
     if (f.live && Date.now() / 1000 - f.live < 4 * 3600) { const l = document.createElement('div'); l.className = 'live'; l.textContent = '● Running now'; left.append(l); }
-    const rm = document.createElement('button'); rm.className = 'btn small danger'; rm.textContent = 'Remove';
+    const rm = document.createElement('button'); rm.className = 'btn small danger'; rm.textContent = '✕'; rm.title = 'Remove friend'; rm.setAttribute('aria-label', 'Remove friend');
     rm.onclick = () => { if (!confirm(`Remove ${f.name || 'this friend'}?`)) return; friends = friends.filter(x => x.code !== f.code); LS.set('wb_friends', friends); renderFriends(); connectFriends(); };
-    li.append(left, rm); return li;
+    const note = document.createElement('button'); note.className = 'btn small'; note.textContent = '💬 Message';
+    note.onclick = () => openNote(f);
+    const right = document.createElement('div'); right.className = 'friend-actions'; right.append(note, rm);
+    li.append(left, right); return li;
   }));
 }
 $('#add-friend-form').onsubmit = async e => {
@@ -771,6 +853,8 @@ function bindSettings() {
   bindCheck('#set-keepawake', 'keepAwake', () => setWake(!!run && settings.keepAwake));
   bindCheck('#set-share', 'share');
   bindCheck('#set-notify-friends', 'notifyFriends');
+  bindCheck('#set-voice', 'voice', () => { if (settings.voice) { unlockSpeech(); speak('Voice updates on.'); } });
+  bindCheck('#set-milestones', 'milestones');
   const bindSelect = (id, key, num) => { const el = $(id); el.value = String(settings[key]); el.onchange = () => { settings[key] = num ? +el.value : el.value; saveSettings(); }; };
   bindSelect('#set-sound', 'sound');
   bindSelect('#set-default-pace', 'defaultPace', true);
@@ -815,6 +899,222 @@ $('#sheet-handle').onclick = () => $('#sheet').classList.toggle('expanded');
 // keep Leaflet's bottom controls (attribution) above the stats sheet
 if (window.ResizeObserver) new ResizeObserver(() => document.documentElement.style.setProperty('--sheet-h', $('#sheet').offsetHeight + 'px')).observe($('#sheet'));
 window.addEventListener('beforeunload', persistRun);
+window.addEventListener('pagehide', persistRun);
+
+// ---------- goals ----------
+const hasGoal = g => !!(g && (g.dist > 0 || g.pace > 0));
+function goalLabel(g) {
+  if (!hasGoal(g)) return '';
+  const p = [];
+  if (g.dist) p.push(`${+(g.dist / 1000).toFixed(2)} km`);
+  if (g.pace) p.push(`${fmtPace(g.pace)} /km (${(3600 / g.pace).toFixed(1)} km/h)`);
+  return p.join(' @ ');
+}
+function parsePace(s) {
+  s = String(s || '').trim(); if (!s) return 0;
+  const m = s.match(/^(\d{1,2})[:.,'](\d{1,2})$/);
+  if (m) return +m[1] * 60 + Math.min(59, +m[2]);
+  const n = parseFloat(s); return isFinite(n) && n > 0 ? Math.round(n * 60) : 0;
+}
+// status of a run against its goal; diffMs > 0 means ahead of goal pace
+function goalStatus(r, g) {
+  const st = { pct: null, remaining: null, diffMs: null, projMs: null, needPace: null, targetMs: null };
+  if (g.dist) { st.pct = Math.min(100, r.dist / g.dist * 100); st.remaining = Math.max(0, g.dist - r.dist); }
+  if (g.dist && r.dist > 100) st.projMs = r.moving / r.dist * g.dist;
+  if (g.pace && r.dist > 50) st.diffMs = r.dist / 1000 * g.pace * 1000 - r.moving;
+  if (g.dist && g.pace) {
+    st.targetMs = g.dist / 1000 * g.pace * 1000;
+    if (st.remaining > 0) { const left = st.targetMs - r.moving; st.needPace = left > 0 ? (left / 1000) / (st.remaining / 1000) : Infinity; }
+  }
+  return st;
+}
+const aheadText = ms => `${fmtDur(Math.abs(ms))} ${ms >= 0 ? 'ahead of' : 'behind'} goal pace`;
+function goalResult(r) {
+  const g = r.goal; if (!hasGoal(g)) return null;
+  const lines = []; let hit = true;
+  if (g.dist) {
+    const ok = r.dist >= g.dist * 0.995; hit = hit && ok;
+    lines.push(ok ? `Distance: ${fmtKm(r.dist)} / ${fmtKm(g.dist)} km ✓`
+      : `Distance: ${fmtKm(r.dist)} / ${fmtKm(g.dist)} km — ${fmtDist(g.dist - r.dist)} short (${Math.round(r.dist / g.dist * 100)}%)`);
+  }
+  if (g.pace) {
+    const pm = paceOf(r.dist, r.moving), pe = paceOf(r.dist, r.moving + r.paused);
+    const ok = isFinite(pm) && pm <= g.pace; hit = hit && ok;
+    const diff = (g.pace - pm) * r.dist / 1000; // seconds gained over the run
+    lines.push(`Pace: ${fmtPace(pm)} /km moving vs ${fmtPace(g.pace)} target ${ok ? '✓' : '✗'} (${fmtDur(Math.abs(diff) * 1000)} ${diff >= 0 ? 'faster' : 'slower'} overall)`);
+    lines.push(`Speed: ${fmtSpeed(r.dist, r.moving)} km/h moving vs ${(3600 / g.pace).toFixed(1)} km/h target · ${fmtPace(pe)} /km including pauses`);
+  }
+  if (g.dist && g.pace) lines.push(`Target time ${fmtDur(g.dist / 1000 * g.pace * 1000)} · your moving time ${fmtDur(r.moving)}`);
+  return { hit, lines };
+}
+function renderGoal(r, elapsed, cur) {
+  const g = (run ? run.goal : settings.goal) || {};
+  const on = hasGoal(g);
+  $('#btn-goal').textContent = on ? `🎯 ${goalLabel(g).replace(/ \(.*\)/, '')}` : '🎯 Set goal';
+  const st = goalStatus(r, g);
+  // sheet progress box
+  $('#goal-box').classList.toggle('hidden', !(on && run));
+  if (on && run) {
+    const fill = $('#goal-bar-fill');
+    fill.style.width = (st.pct ?? Math.min(100, Math.max(0, 50 + (st.diffMs || 0) / 1000))) + '%';
+    fill.classList.toggle('done', st.pct >= 100);
+    $('#goal-dist-line').textContent = g.dist ? (st.remaining > 0 ? `${fmtDist(st.remaining)} to go · ${Math.floor(st.pct)}%` : '🎉 Distance goal reached!') : `${fmtKm(r.dist)} km`;
+    const pl = $('#goal-pace-line');
+    pl.textContent = st.diffMs != null ? aheadText(st.diffMs) : g.pace ? `Target ${fmtPace(g.pace)} /km` : (st.projMs ? `Finish ~${fmtDur(st.projMs)}` : '');
+    pl.className = st.diffMs == null ? '' : st.diffMs >= 0 ? 'ahead' : 'behind';
+  }
+  // full-screen stats
+  const km = fmtKm(r.dist);
+  $('#b-dist').textContent = km;
+  $('#b-dist-sub').textContent = g.dist ? `of ${fmtKm(g.dist)} km · ${Math.floor(st.pct)}%` : 'km';
+  const ring = $('#ring-fg');
+  ring.setAttribute('stroke-dasharray', `${g.dist ? st.pct : 0} 100`);
+  ring.classList.toggle('done', st.pct >= 100);
+  const bs = $('#b-status');
+  if (!on) { bs.textContent = run ? 'No goal set — tap 🎯 to add one' : 'Set a goal, then start your run'; bs.className = 'b-status'; }
+  else {
+    const parts = [];
+    if (g.dist) parts.push(st.remaining > 0 ? `${fmtDist(st.remaining)} to go` : '🎉 Goal distance reached!');
+    if (st.diffMs != null) parts.push(aheadText(st.diffMs));
+    else if (g.pace) parts.push(`Target ${fmtPace(g.pace)} /km`);
+    bs.textContent = parts.join(' · ');
+    bs.className = 'b-status ' + (st.diffMs == null ? '' : st.diffMs >= 0 ? 'ahead' : 'behind');
+  }
+  $('#b-time').textContent = fmtDur(elapsed);
+  $('#b-moving').textContent = fmtDur(r.moving);
+  $('#b-cur').textContent = fmtPace(cur);
+  $('#b-avg-m').textContent = fmtPace(paceOf(r.dist, r.moving));
+  $('#b-avg-e').textContent = fmtPace(paceOf(r.dist, elapsed));
+  $('#b-speed').textContent = fmtSpeed(r.dist, r.moving);
+  $('#b-proj').textContent = st.projMs ? fmtDur(st.projMs) : '—';
+  $('#b-proj-l').textContent = g.dist ? `Projected ${fmtKm(g.dist)} km time` : 'Projected finish';
+  $('#b-need').textContent = st.needPace === Infinity ? 'missed' : st.needPace ? fmtPace(st.needPace) : '—';
+}
+function checkMilestones() {
+  const g = run.goal || {};
+  if (g.dist) {
+    const st = goalStatus(run, g);
+    for (const m of [25, 50, 75, 100]) {
+      if (st.pct >= m && !run.marks.includes(m)) {
+        run.marks.push(m);
+        const done = m === 100;
+        const title = done ? '🎉 Goal distance reached!' : `🎯 ${m}% of your goal`;
+        const body = done ? `${fmtKm(g.dist)} km in ${fmtDur(run.moving + run.paused)} (moving ${fmtDur(run.moving)})` + (st.diffMs != null ? ` · ${aheadText(st.diffMs)}` : '')
+          : `${fmtDist(st.remaining)} to go` + (st.diffMs != null ? ` · ${aheadText(st.diffMs)}` : st.projMs ? ` · finish ~${fmtDur(st.projMs)}` : '');
+        if (settings.milestones) { notify(title, body, 'goal'); playSound('friend'); }
+        toast(`${title} — ${body}`, 4000);
+        speak(done ? `Goal reached! ${spokenKm(g.dist)} in ${spokenDur(run.moving + run.paused)}.${st.diffMs != null ? ' ' + spokenAhead(st.diffMs) : ''}`
+          : `${m} percent of your goal. ${spokenKm(st.remaining)} to go.${st.diffMs != null ? ' ' + spokenAhead(st.diffMs) : ''}`);
+        return; // one announcement per tick
+      }
+    }
+  }
+  const km = Math.floor(run.dist / 1000);
+  if (km > (run.kmSaid || 0)) {
+    run.kmSaid = km;
+    const st = goalStatus(run, g);
+    let msg = `${km} kilometer${km > 1 ? 's' : ''}. Time ${spokenDur(run.moving + run.paused)}. Average pace ${spokenPace(paceOf(run.dist, run.moving))}.`;
+    if (st.diffMs != null) msg += ' ' + spokenAhead(st.diffMs);
+    if (st.needPace && isFinite(st.needPace) && st.diffMs < 0) msg += ` You need ${spokenPace(st.needPace)} from here to make it.`;
+    speak(msg);
+  }
+}
+
+// goal modal
+function openGoal() {
+  const g = (run ? run.goal : settings.goal) || { dist: 0, pace: 0 };
+  $('#goal-dist').value = g.dist ? +(g.dist / 1000).toFixed(2) : '';
+  $('#goal-pace').value = g.pace ? fmtPace(g.pace) : '';
+  $('#goal-speed').value = g.pace ? (3600 / g.pace).toFixed(1) : '';
+  syncGoalModal(); openModal('#goal-modal');
+}
+function readGoalModal() {
+  const km = parseFloat(String($('#goal-dist').value).replace(',', '.'));
+  return { dist: isFinite(km) && km > 0 ? Math.round(km * 1000) : 0, pace: parsePace($('#goal-pace').value) };
+}
+function syncGoalModal() {
+  const g = readGoalModal();
+  $$('#goal-dist-presets button').forEach(b => b.classList.toggle('active', Math.round(+b.dataset.km * 1000) === g.dist));
+  $('#goal-summary').textContent = hasGoal(g)
+    ? `Goal: ${goalLabel(g)}${g.dist && g.pace ? ` → finish in ${fmtDur(g.dist / 1000 * g.pace * 1000)}` : ''}`
+    : 'No goal — just run.';
+}
+$$('#goal-dist-presets button').forEach(b => b.onclick = () => { $('#goal-dist').value = +b.dataset.km || ''; syncGoalModal(); });
+$('#goal-dist').oninput = syncGoalModal;
+$('#goal-pace').oninput = () => { const p = parsePace($('#goal-pace').value); $('#goal-speed').value = p ? (3600 / p).toFixed(1) : ''; syncGoalModal(); };
+$('#goal-speed').oninput = () => { const v = parseFloat($('#goal-speed').value); $('#goal-pace').value = v > 0 ? fmtPace(3600 / v) : ''; syncGoalModal(); };
+function applyGoal(g) {
+  settings.goal = g; saveSettings();
+  if (run) { run.goal = { ...g }; run.marks = run.marks.filter(m => g.dist && run.dist / g.dist * 100 >= m); persistRun(); }
+  closeModals(); renderStats();
+}
+$('#goal-save').onclick = () => { const g = readGoalModal(); applyGoal(g); toast(hasGoal(g) ? `Goal set: ${goalLabel(g)}` : 'Goal cleared'); };
+$('#goal-clear').onclick = () => { applyGoal({ dist: 0, pace: 0 }); toast('Goal cleared'); };
+$('#btn-goal').onclick = openGoal;
+
+// Map | Stats toggle
+function setMode(mode) {
+  $('#view-run').classList.toggle('stats-mode', mode === 'stats');
+  $$('.seg button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  try { localStorage.setItem('wb_mode', mode); } catch {}
+  if (mode === 'map') setTimeout(() => map.invalidateSize(), 50);
+}
+$$('.seg button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+
+// ---------- voice ----------
+function unlockSpeech() { // iOS needs a first utterance inside a tap
+  try { if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } } catch {}
+}
+function speak(text) {
+  if (!settings.voice || !('speechSynthesis' in window) || !text) return;
+  try {
+    const u = new SpeechSynthesisUtterance(text.replace(/\p{Extended_Pictographic}/gu, '').trim());
+    u.rate = 1; u.volume = Math.max(0.3, settings.volume);
+    speechSynthesis.speak(u);
+  } catch {}
+}
+const spokenKm = m => m >= 1000 ? `${(m / 1000).toFixed(m % 1000 < 50 ? 0 : 1)} kilometers` : `${Math.round(m / 10) * 10} meters`;
+function spokenDur(ms) {
+  const s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+  return [h && `${h} hour${h > 1 ? 's' : ''}`, m && `${m} minute${m > 1 ? 's' : ''}`, (!h && ss) && `${ss} second${ss > 1 ? 's' : ''}`].filter(Boolean).join(' ') || '0 seconds';
+}
+function spokenPace(sec) {
+  if (!isFinite(sec) || sec <= 0) return 'unknown';
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return `${m} ${s ? s : ''} per kilometer`.replace('  ', ' ');
+}
+const spokenAhead = ms => `${spokenDur(Math.abs(ms))} ${ms >= 0 ? 'ahead of' : 'behind'} goal pace.`;
+function spokenGoal(g) {
+  const p = [];
+  if (g.dist) p.push(spokenKm(g.dist));
+  if (g.pace) p.push(`at ${spokenPace(g.pace)}`);
+  return p.join(' ');
+}
+
+// ---------- notes to friends ----------
+const NOTE_PRESETS = {
+  nudge: '🏃 Time for a run! Lace up and go?',
+  cheer: '📣 Go go go! You’ve got this!',
+  congrats: '🎉 Congrats on your run — great job!',
+};
+let noteTarget = null; // a friend, or 'all'
+function openNote(f) {
+  noteTarget = f;
+  $('#note-title').textContent = f === 'all' ? 'Message all friends' : `Message ${f.name || 'friend'}`;
+  $('#note-text').value = '';
+  openModal('#note-modal');
+}
+async function sendNote(f, kind, text) {
+  text = String(text || '').trim().slice(0, 200); if (!text) return;
+  const targets = f === 'all' ? friends : [f];
+  const results = await Promise.all(targets.map(t => ntfyPost(helloTopic(t.code), displayName(), text, ['wbnote', 'c-' + myCode, 'k-' + kind])));
+  const ok = results.filter(Boolean).length;
+  toast(ok ? `Sent to ${f === 'all' ? `${ok} friend${ok > 1 ? 's' : ''}` : (f.name || 'friend')}` : 'Could not send — are you offline?');
+  if (ok) closeModals();
+}
+$$('#note-modal .note-quick button').forEach(b => b.onclick = () => sendNote(noteTarget, b.dataset.kind, NOTE_PRESETS[b.dataset.kind]));
+$('#note-form').onsubmit = e => { e.preventDefault(); sendNote(noteTarget, 'note', $('#note-text').value); };
+$('#btn-nudge-all').onclick = () => openNote('all');
 
 // ---------- demo mode (?demo): simulated runner heading for fountains ----------
 const demo = {
@@ -838,6 +1138,7 @@ const demo = {
 
 // ---------- boot ----------
 bindSettings();
+try { if (localStorage.getItem('wb_mode') === 'stats') setMode('stats'); } catch {}
 restoreRun();
 renderControls(); renderStats(); renderHistory(); renderFriends(); renderFeed();
 connectFriends();
