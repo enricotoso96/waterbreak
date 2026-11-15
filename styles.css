@@ -51,6 +51,10 @@ button, input, select { font: inherit; color: inherit; }
 /* Map */
 #map { position: absolute; inset: 0; background: var(--surface-2); }
 .leaflet-container { font: inherit; }
+#map .leaflet-bottom { bottom: var(--sheet-h, 180px); }
+@media (min-width: 720px) { #map .leaflet-bottom { bottom: 0; } }
+.chip.loading { animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .55; } }
 @media (prefers-color-scheme: dark) {
   #map .leaflet-tile-pane, #rd-map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.92) contrast(.9); }
 }

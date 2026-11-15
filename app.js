@@ -181,6 +181,7 @@ async function loadFountains(lat, lng, radius = 2500) {
   if (overpassBusy) return;
   if (fetchedCenters.some(c => hav(c, { lat, lng }) < c.r * 0.55)) return;
   overpassBusy = true;
+  $('#fountain-chip').classList.add('loading');
   const q = `[out:json][timeout:25];(` +
     `node["amenity"="drinking_water"](around:${radius},${lat},${lng});` +
     `node["drinking_water"="yes"](around:${radius},${lat},${lng});` +
@@ -190,7 +191,7 @@ async function loadFountains(lat, lng, radius = 2500) {
     let data = null;
     for (const url of OVERPASS) {
       try {
-        const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
+        const r = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(q), headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, signal: AbortSignal.timeout ? AbortSignal.timeout(35000) : undefined });
         if (r.ok) { data = await r.json(); break; }
       } catch {}
     }
@@ -207,7 +208,7 @@ async function loadFountains(lat, lng, radius = 2500) {
     }
     fetchedCenters.push({ lat, lng, r: radius, t: Date.now() });
     cacheFountains(); updateFountainCount();
-  } finally { overpassBusy = false; }
+  } finally { overpassBusy = false; $('#fountain-chip').classList.remove('loading'); }
 }
 function updateFountainCount() { $('#fountain-count').textContent = fountains.size; }
 let moveTimer;
@@ -216,9 +217,9 @@ map.on('moveend', () => {
   moveTimer = setTimeout(() => { if (map.getZoom() >= 13) { const c = map.getCenter(); loadFountains(c.lat, c.lng, 2000); } }, 700);
 });
 
-function nearestFountain(p) {
+function nearestFountain(p, minDist = 0) {
   let best = null, bd = Infinity;
-  for (const f of fountains.values()) { const d = hav(p, f); if (d < bd) { bd = d; best = f; } }
+  for (const f of fountains.values()) { const d = hav(p, f); if (d >= minDist && d < bd) { bd = d; best = f; } }
   return best ? { f: best, d: bd } : null;
 }
 
@@ -439,7 +440,8 @@ async function setDestination(ll, name) {
     await fetchRoute(from);
     const b = L.latLngBounds([[from.lat, from.lng], [dest.lat, dest.lng]]);
     if (dest.route) dest.route.coords.forEach(c => b.extend([c.lat, c.lng]));
-    follow = false; map.fitBounds(b, { padding: [60, 60] });
+    follow = false;
+    map.fitBounds(b, { paddingTopLeft: [30, 230], paddingBottomRight: [70, ($('#sheet').offsetHeight || 200) + 20], maxZoom: 17 });
     updateDestination(from);
   } else { $('#dest-next').textContent = 'Waiting for GPS…'; }
 }
@@ -531,7 +533,7 @@ map.on('click', e => {
 });
 function goNearestFountain() {
   const p = geo.last || map.getCenter();
-  const n = nearestFountain(p);
+  const n = nearestFountain(p, 20); // skip the one you're standing at
   if (!n) { toast('No fountains loaded near you yet'); return; }
   setDestination({ lat: n.f.lat, lng: n.f.lng }, n.f.name || 'Water fountain');
 }
@@ -805,6 +807,8 @@ $('#btn-pause').onclick = () => setPaused('manual', !run.manual);
 $('#btn-stop').onclick = finishRun;
 $('#btn-recenter').onclick = () => { follow = true; $('#btn-recenter').classList.add('on'); if (geo.last) map.setView([geo.last.lat, geo.last.lng], Math.max(map.getZoom(), 16)); else geo.start(); };
 $('#sheet-handle').onclick = () => $('#sheet').classList.toggle('expanded');
+// keep Leaflet's bottom controls (attribution) above the stats sheet
+if (window.ResizeObserver) new ResizeObserver(() => document.documentElement.style.setProperty('--sheet-h', $('#sheet').offsetHeight + 'px')).observe($('#sheet'));
 window.addEventListener('beforeunload', persistRun);
 
 // ---------- demo mode (?demo): simulated runner heading for fountains ----------
