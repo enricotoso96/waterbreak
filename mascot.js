@@ -21,7 +21,7 @@
   function svg(mood = 'happy', size = 200) {
     const m = MOODS[mood] || MOODS.happy;
     const ear = side => {
-      const rot = side < 0 ? -m.ear : m.ear;
+      const rot = -m.ear; // the right ear is a mirror image, so the same rotation droops both outward
       const g = `<g transform="rotate(${rot} 72 84)"><path d="M44 90 C36 52 52 36 84 58 Z" fill="#7b818c"/><path d="M52 82 C48 60 58 52 76 62 Z" fill="#3a3d44"/></g>`;
       return side < 0 ? g : `<g transform="translate(220 0) scale(-1 1)">${g}</g>`;
     };

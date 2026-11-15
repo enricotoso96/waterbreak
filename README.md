@@ -11,6 +11,19 @@ A GPS run tracker you run in your phone's browser (installable as an app). It fi
 - **Run history** with route map, detailed stats and GPX export. Runs are stored only on the device.
 - **Friends**: share your 10-character code. When a friend adds it you are connected both ways. Friends are notified when you start and finish (with your stats), plus optional progress updates.
 
+- **Rocco the raccoon** (Home tab): happy when you run, sadder each day you don't, and he throws a party when you beat your goal, set a distance or pace record, or run 3+ times in a week.
+- **Goals**: distance and/or pace (or speed in km/h). Live progress bar, ahead/behind goal pace, projected finish, and the pace you need to make it. A full-screen **Stats** view. Voice updates every km, and notifications at 25/50/75/100%. A goal report at the end of each run.
+- **Friend notes**: nudge friends to go running, cheer them during a run, congratulate them after, or send your own message.
+- **Run recovery**: the active run is saved every 5 s. If the app closes, you can Resume (the gap counts as a pause), Save & finish, or Discard.
+- **Invite-only sign-in** with Google (see below).
+
+## Invite-only Google sign-in
+1. In Google Cloud Console create an OAuth client ID of type *Web application*, with Authorized JavaScript origin `https://enricotoso96.github.io`.
+2. Put it in `config.js` → `googleClientId`.
+3. Invite people: `node tools/add-user.mjs name@gmail.com` (stores only a SHA-256 hash of the address). Commit and push.
+
+With an empty `googleClientId` the gate is off. This is a front-door gate on a static site; runs stay on each device.
+
 ## Open data / services used
 OpenStreetMap tiles, Overpass API (fountains), routing.openstreetmap.de (OSRM foot routing), Nominatim (search), ntfy.sh (friend message relay). No backend or accounts.
 
