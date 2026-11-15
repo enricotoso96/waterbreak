@@ -1,6 +1,6 @@
 /* WaterBreak service worker: offline app shell + notification clicks. */
-const CACHE = 'waterbreak-v5';
-const SHELL = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon.svg',
+const CACHE = 'waterbreak-v6';
+const SHELL = ['./', './index.html', './styles.css', './app.js', './mascot.js', './config.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon.svg',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 
 self.addEventListener('install', e => {

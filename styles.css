@@ -254,3 +254,53 @@ button, input, select { font: inherit; color: inherit; }
 .resume-card p { margin: 6px 0 10px; font-size: 14px; color: var(--muted); }
 .resume-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (min-width: 720px) { .resume-card { right: auto; width: 420px; } }
+
+/* ---------- home & Rocco ---------- */
+#view-run.stats-mode #map .leaflet-control-container { display: none; }
+.home-head { display: flex; justify-content: space-between; align-items: center; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--line); }
+.rac-stage { display: flex; flex-direction: column; align-items: center; margin-top: 4px; }
+.bubble { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 12px 16px; max-width: 340px; text-align: center; box-shadow: var(--shadow); margin-bottom: 12px; }
+.bubble b { display: block; font-size: 17px; }
+.bubble span { display: block; color: var(--muted); font-size: 14px; margin-top: 3px; }
+.bubble::after { content: ""; position: absolute; left: 50%; bottom: -9px; width: 16px; height: 16px; background: var(--surface); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); transform: translateX(-50%) rotate(45deg); }
+.rac-wrap { line-height: 0; }
+.rac { overflow: visible; }
+.rac-happy { animation: rac-bob 2.2s ease-in-out infinite; }
+.rac-party { animation: rac-jump 1s ease-in-out infinite; }
+.rac-ok { animation: rac-bob 3.5s ease-in-out infinite; }
+.rac-sad { animation: rac-sway 5s ease-in-out infinite; filter: saturate(.7); }
+.rac-crying { animation: rac-sway 4s ease-in-out infinite; filter: saturate(.5); }
+.rac .tear { animation: rac-tear 1.8s ease-in infinite; }
+.rac .tear.t2 { animation-delay: .9s; }
+.rac .confetti { animation: rac-confetti 1.6s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: center; }
+@keyframes rac-bob { 50% { transform: translateY(-6px); } }
+@keyframes rac-jump { 0%, 100% { transform: translateY(0) scale(1, 1); } 30% { transform: translateY(-16px) scale(.97, 1.03); } 60% { transform: translateY(0) scale(1.04, .96); } }
+@keyframes rac-sway { 50% { transform: rotate(-3deg) translateY(3px); } }
+@keyframes rac-tear { 0% { transform: translateY(0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translateY(26px); opacity: 0; } }
+@keyframes rac-confetti { to { transform: translateY(10px) rotate(160deg); } }
+@media (prefers-reduced-motion: reduce) { .rac, .rac * { animation: none !important; } }
+.happy-meter { width: 100%; max-width: 300px; margin-top: 6px; font-size: 12px; color: var(--muted); text-align: center; }
+.hm-bar { height: 10px; border-radius: 5px; background: var(--surface-2); overflow: hidden; margin-top: 4px; }
+.hm-bar i { display: block; height: 100%; border-radius: 5px; transition: width .8s; }
+.home-cta { width: 100%; margin: 16px 0 12px; display: block; }
+.home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.home-grid div { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; }
+.home-grid b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+.home-grid span { font-size: 12px; color: var(--muted); }
+#home-last { cursor: pointer; }
+#home-last .ri-stats { display: flex; gap: 16px; }
+#home-last .ri-stats b { font-size: 20px; }
+#home-last .ri-stats span { display: block; font-size: 12px; color: var(--muted); }
+.hg-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-weight: 600; }
+.rd-rac { display: flex; gap: 10px; align-items: center; background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 14px; padding: 6px 12px 6px 4px; margin-bottom: 10px; flex: none; }
+.rd-rac svg { flex: none; }
+.rd-rac p { margin: 2px 0 0; font-size: 14px; }
+
+/* ---------- sign-in gate ---------- */
+.auth-gate { position: fixed; inset: 0; z-index: 5000; background: linear-gradient(180deg, #1aa3e8, #0b5fb5); display: grid; place-items: center; padding: 24px 16px; }
+.auth-card { background: var(--surface); border-radius: 24px; padding: 24px 20px; width: 100%; max-width: 380px; text-align: center; box-shadow: var(--shadow); }
+.auth-card h1 { margin: 6px 0 4px; font-size: 28px; letter-spacing: -.02em; }
+.auth-sub { color: var(--muted); margin: 0 0 18px; }
+.gsi-button { display: flex; justify-content: center; min-height: 44px; }
+.auth-msg { color: var(--muted); font-size: 13px; margin: 14px 0 0; }

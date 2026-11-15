@@ -390,7 +390,8 @@ function finalizeRun(now) {
   run = null; LS.del('wb_active');
   setWake(false);
   renderControls(); renderStats(); renderHistory();
-  if (kept) openRun(saved.id); // end-of-run summary
+  renderHome();
+  if (kept) openRun(saved.id, true); // end-of-run summary with Rocco's verdict
 }
 function persistRun() {
   if (!run) return;
@@ -625,7 +626,7 @@ function renderHistory() {
   }));
 }
 let rdMap = null, rdLayer = null, rdCurrent = null;
-function openRun(id) {
+function openRun(id, justFinished = false) {
   const r = LS.get('wb_runs', []).find(x => x.id === id); if (!r) return;
   rdCurrent = r;
   $('#rd-title').textContent = new Date(r.start).toLocaleString([], { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -643,6 +644,19 @@ function openRun(id) {
   if (gr) {
     box.className = 'rd-goal ' + (gr.hit ? 'hit' : 'miss');
     box.innerHTML = `<div class="gt">${gr.hit ? '🎉 Goal achieved!' : '🎯 Goal not reached — so close!'}</div><ul>${gr.lines.map(l => `<li>${l}</li>`).join('')}</ul>`;
+  }
+  const rac = $('#rd-rac');
+  rac.classList.toggle('hidden', !justFinished);
+  if (justFinished) {
+    const runs = LS.get('wb_runs', []);
+    const hl = Raccoon.highlights(r, runs, goalResult);
+    const gr = goalResult(r);
+    const mood = hl.length ? 'party' : gr && !gr.hit ? 'ok' : 'happy';
+    const msg = hl.length ? `Amazing run! I'm so proud: ${hl.join(', ')}.`
+      : gr && !gr.hit ? `Good effort! You didn't quite hit the goal, but every run counts. We'll get it next time!`
+      : `Nice run! ${fmtKm(r.dist)} km done — I feel great. Don't forget to drink some water!`;
+    rac.innerHTML = Raccoon.svg(mood, 84) + `<div><b>Rocco says</b><p></p></div>`;
+    rac.querySelector('p').textContent = msg;
   }
   openModal('#run-modal');
   setTimeout(() => {
@@ -884,9 +898,11 @@ function renderNotifState() {
 }
 
 // ---------- tabs & controls ----------
+function showView(name) { const b = $(`.tabbar button[data-view="${name}"]`); if (b) b.click(); }
 $$('.tabbar button').forEach(b => b.onclick = () => {
   $$('.tabbar button').forEach(x => x.classList.toggle('active', x === b));
   $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + b.dataset.view));
+  if (b.dataset.view === 'home') renderHome();
   if (b.dataset.view === 'run') setTimeout(() => map.invalidateSize(), 50);
   if (b.dataset.view === 'friends') $('#friends-badge').classList.add('hidden');
   if (b.dataset.view === 'history') renderHistory();
@@ -1136,11 +1152,119 @@ const demo = {
   emit(speed) { onFix({ lat: this.pos.lat + (Math.random() - .5) * 0.00001, lng: this.pos.lng + (Math.random() - .5) * 0.00001, acc: 6 + Math.random() * 4, speed, t: Date.now() }); },
 };
 
+// ---------- home: Rocco the raccoon ----------
+function weekStart(t) { const d = new Date(t); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime(); }
+function renderHome() {
+  const runs = LS.get('wb_runs', []);
+  const st = Raccoon.state(runs, goalResult);
+  const h = new Date().getHours();
+  const first = (settings.name || '').trim().split(' ')[0];
+  $('#home-greet').textContent = `${h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'}${first ? ', ' + first : ''}!`;
+  $('#home-rac').innerHTML = Raccoon.svg(st.mood, 210);
+  $('#bubble-1').textContent = st.lines[0];
+  $('#bubble-2').textContent = st.lines[1] || '';
+  const fill = $('#hm-fill'); fill.style.width = st.happiness + '%';
+  fill.style.background = st.happiness > 66 ? 'var(--ok)' : st.happiness > 33 ? 'var(--warn)' : 'var(--danger)';
+  $('#h-days').textContent = st.days == null ? '—' : st.days;
+  const WEEK = 7 * 864e5, ws = weekStart(Date.now());
+  $('#h-week').textContent = (runs.filter(r => r.start >= ws).reduce((a, r) => a + r.dist, 0) / 1000).toFixed(1);
+  // consecutive weeks with at least one run (this week may still be empty)
+  let streak = 0;
+  for (let w = ws, i = 0; i < 520; i++, w -= WEEK) {
+    const has = runs.some(r => r.start >= w && r.start < w + WEEK);
+    if (has) streak++; else if (i > 0) break;
+  }
+  $('#h-streak').textContent = streak;
+  $('#h-total').textContent = runs.length;
+  const last = runs[0], lc = $('#home-last');
+  lc.classList.toggle('hidden', !last);
+  if (last) {
+    const gr = goalResult(last);
+    lc.innerHTML = `<div class="label">Last run</div><div class="ri-stats"><div><b>${fmtKm(last.dist)}</b><span>km</span></div><div><b>${fmtDur(last.moving + last.paused)}</b><span>total</span></div><div><b>${fmtPace(paceOf(last.dist, last.moving))}</b><span>/km moving</span></div><div><b>${gr ? (gr.hit ? '✓' : '✗') : '—'}</b><span>goal</span></div></div>`;
+    lc.onclick = () => openRun(last.id);
+  }
+  const g = settings.goal;
+  $('#home-goal').innerHTML = `<div class="label">Next run goal</div><div class="hg-row"><span></span><button class="btn small">${hasGoal(g) ? 'Change' : 'Set a goal'}</button></div>`;
+  $('#home-goal span').textContent = hasGoal(g) ? '🎯 ' + goalLabel(g) : 'No goal yet — Rocco loves a challenge!';
+  $('#home-goal button').onclick = openGoal;
+  $('#btn-home-run').textContent = run ? '▶ Back to your run' : "🏃 Let's run";
+}
+$('#btn-home-run').onclick = () => showView('run');
+
+// ---------- sign-in (Google, invite-only) ----------
+// Note: this is a front-door gate for a static site. Runs live on each device; nothing server-side to protect.
+const CFG = window.WB_CONFIG || {};
+let currentUser = null;
+async function sha256(s) {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+const emailAllowed = async e => (CFG.allowedEmailSha256 || []).includes(await sha256(String(e).trim().toLowerCase()));
+function decodeJwt(t) {
+  const p = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+  return JSON.parse(decodeURIComponent([...atob(p)].map(c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('')));
+}
+function applyUser(u) {
+  currentUser = u;
+  $('#account-card').classList.remove('hidden');
+  $('#account-email').textContent = `Signed in as ${u.email}`;
+  if (!settings.name && u.name) { settings.name = u.name.slice(0, 30); saveSettings(); $('#set-name').value = settings.name; }
+  const av = $('#home-avatar'); if (u.picture) { av.src = u.picture; av.classList.remove('hidden'); }
+}
+async function authInit() {
+  if (!CFG.googleClientId) return true; // gate disabled until a client ID is configured
+  const a = LS.get('wb_auth', null);
+  if (a && a.until > Date.now() && await emailAllowed(a.email)) { applyUser(a); return true; }
+  $('#gate-rac').innerHTML = Raccoon.svg('happy', 150);
+  $('#auth-gate').classList.remove('hidden');
+  const s = document.createElement('script');
+  s.src = 'https://accounts.google.com/gsi/client'; s.async = true;
+  s.onload = () => {
+    google.accounts.id.initialize({ client_id: CFG.googleClientId, callback: onGoogleCredential, auto_select: true, cancel_on_tap_outside: false });
+    google.accounts.id.renderButton($('#gsi-button'), { theme: 'filled_blue', size: 'large', shape: 'pill', text: 'signin_with' });
+    google.accounts.id.prompt();
+  };
+  s.onerror = () => { $('#auth-msg').textContent = 'Could not reach Google sign-in. Check your connection and reload.'; };
+  document.head.append(s);
+  return false;
+}
+async function onGoogleCredential(resp) {
+  let p; try { p = decodeJwt(resp.credential); } catch { return; }
+  if (p.aud !== CFG.googleClientId || !p.email_verified || p.exp * 1000 < Date.now()) { $('#auth-msg').textContent = 'Sign-in failed, please try again.'; return; }
+  if (!(await emailAllowed(p.email))) {
+    $('#gate-rac').innerHTML = Raccoon.svg('sad', 150);
+    $('#auth-msg').textContent = `${p.email} isn't on the WaterBreak invite list yet. Ask Enrico for an invite!`;
+    return;
+  }
+  const u = { email: p.email, name: p.given_name || p.name || '', picture: p.picture || '', until: Date.now() + 30 * 864e5 };
+  LS.set('wb_auth', u); applyUser(u);
+  $('#auth-gate').classList.add('hidden');
+  bootApp();
+}
+$('#btn-signout').onclick = () => {
+  if (!confirm('Sign out of WaterBreak?')) return;
+  LS.del('wb_auth');
+  try { google.accounts.id.disableAutoSelect(); } catch {}
+  location.reload();
+};
+$('#btn-invite').onclick = async () => {
+  const text = `Join me on WaterBreak — a run tracker that finds water fountains, with a raccoon who gets sad if we don't run 🦝💧 ${location.origin + location.pathname} — my friend code: ${prettyCode(myCode)}`;
+  try { if (navigator.share) { await navigator.share({ title: 'WaterBreak invite', text }); return; } } catch { return; }
+  try { await navigator.clipboard.writeText(text); toast('Invite copied — paste it in a message'); } catch { toast(text, 6000); }
+};
+
 // ---------- boot ----------
-bindSettings();
-try { if (localStorage.getItem('wb_mode') === 'stats') setMode('stats'); } catch {}
-restoreRun();
-renderControls(); renderStats(); renderHistory(); renderFriends(); renderFeed();
-connectFriends();
-geo.start();
-if (DEMO) toast('Demo mode: simulated GPS in Central Park', 4000);
+let booted = false;
+function bootApp() {
+  if (booted) return; booted = true;
+  bindSettings();
+  try { if (localStorage.getItem('wb_mode') === 'stats') setMode('stats'); } catch {}
+  restoreRun();
+  renderControls(); renderStats(); renderHistory(); renderFriends(); renderFeed(); renderHome();
+  if (run || LS.get('wb_active', null)) showView('run');
+  connectFriends();
+  geo.start();
+  if (DEMO) toast('Demo mode: simulated GPS in Central Park', 4000);
+}
+authInit().then(ok => { if (ok) bootApp(); });
+
