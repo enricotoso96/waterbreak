@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>WaterBreak</title>
+<meta name="description" content="GPS run tracker that finds drinking fountains along your route.">
+<meta name="theme-color" content="#0b6bcb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="WaterBreak">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- RUN VIEW -->
+  <section id="view-run" class="view active" aria-label="Run">
+    <div id="map"></div>
+
+    <div class="top-chips">
+      <span id="gps-chip" class="chip"><span class="dot"></span><span id="gps-text">Locating…</span></span>
+      <span id="fountain-chip" class="chip">💧 <span id="fountain-count">0</span></span>
+    </div>
+
+    <div class="map-fabs">
+      <button id="btn-recenter" class="fab" title="Center on me" aria-label="Center on me">
+        <svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="4" fill="currentColor"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="12" cy="12" r="7.5" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+      </button>
+      <button id="btn-dest" class="fab" title="Set destination" aria-label="Set destination">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 22s7-6.3 7-12a7 7 0 1 0-14 0c0 5.7 7 12 7 12z" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="10" r="2.6" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-nearest" class="fab" title="Route to nearest fountain" aria-label="Route to nearest fountain">💧</button>
+    </div>
+
+    <div id="dest-card" class="dest-card hidden">
+      <div class="dest-head">
+        <div>
+          <div class="dest-label">Destination</div>
+          <div id="dest-name" class="dest-name">—</div>
+        </div>
+        <button id="btn-dest-clear" class="icon-btn" aria-label="Clear destination">✕</button>
+      </div>
+      <div class="dest-stats">
+        <div><b id="dest-dist">—</b><span>route left</span></div>
+        <div><b id="dest-eta">—</b><span>est. time</span></div>
+        <div><b id="dest-arrive">—</b><span>arrive at</span></div>
+      </div>
+      <div id="dest-next" class="dest-next"></div>
+      <details id="dest-steps-wrap"><summary>All directions</summary><ol id="dest-steps"></ol></details>
+    </div>
+
+    <div id="sheet" class="sheet">
+      <div class="sheet-handle" id="sheet-handle" role="button" aria-label="Expand stats"></div>
+      <div id="state-banner" class="state-banner hidden"></div>
+      <div class="stats-main">
+        <div class="stat big"><b id="s-dist">0.00</b><span>km</span></div>
+        <div class="stat big"><b id="s-time">0:00</b><span>total time</span></div>
+        <div class="stat big"><b id="s-pace">–:––</b><span>current /km</span></div>
+      </div>
+      <div class="stats-more" id="stats-more">
+        <table class="stats-table">
+          <thead><tr><th></th><th>Moving</th><th>With pauses</th></tr></thead>
+          <tbody>
+            <tr><td>Time</td><td id="t-moving">0:00</td><td id="t-elapsed">0:00</td></tr>
+            <tr><td>Speed</td><td id="t-speed-m">– km/h</td><td id="t-speed-e">– km/h</td></tr>
+            <tr><td>Pace</td><td id="t-pace-m">– /km</td><td id="t-pace-e">– /km</td></tr>
+          </tbody>
+        </table>
+        <div class="stats-sub">
+          <span>⏸ <b id="t-paused">0:00</b> paused · <b id="t-pauses">0</b> stops</span>
+          <span>💧 <b id="t-fountains">0</b> fountains passed</span>
+        </div>
+        <div id="nearest-line" class="nearest-line">Nearest water: —</div>
+      </div>
+      <div class="controls">
+        <button id="btn-start" class="btn primary big-btn">Start run</button>
+        <button id="btn-pause" class="btn big-btn hidden">Pause</button>
+        <button id="btn-stop" class="btn danger big-btn hidden">Finish</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- HISTORY VIEW -->
+  <section id="view-history" class="view page" aria-label="Runs">
+    <header class="page-head"><h1>Your runs</h1></header>
+    <div id="history-totals" class="totals"></div>
+    <ul id="history-list" class="card-list"></ul>
+    <p id="history-empty" class="empty">No runs yet. Hit <b>Start run</b> on the map to record your first one.</p>
+  </section>
+
+  <!-- FRIENDS VIEW -->
+  <section id="view-friends" class="view page" aria-label="Friends">
+    <header class="page-head"><h1>Friends</h1></header>
+
+    <div class="card">
+      <div class="label">Your code</div>
+      <div class="code-row">
+        <code id="my-code" class="my-code">—</code>
+        <button id="btn-share-code" class="btn small">Share</button>
+      </div>
+      <p class="hint">Give this code to friends. When they add it, you are connected both ways: they get a notification when you start a run, with your progress and results.</p>
+    </div>
+
+    <div class="card">
+      <div class="label">Add a friend</div>
+      <form id="add-friend-form" class="row-form">
+        <input id="friend-code-input" placeholder="Friend's code" autocapitalize="characters" autocomplete="off" maxlength="16" required>
+        <button class="btn primary small" type="submit">Add</button>
+      </form>
+      <div id="friend-conn" class="hint"></div>
+    </div>
+
+    <div class="card">
+      <div class="label">Connected</div>
+      <ul id="friend-list" class="friend-list"></ul>
+      <p id="friend-empty" class="hint">No friends yet.</p>
+    </div>
+
+    <div class="card">
+      <div class="label">Activity</div>
+      <ul id="feed" class="feed"></ul>
+      <p id="feed-empty" class="hint">Friend runs show up here.</p>
+    </div>
+  </section>
+
+  <!-- SETTINGS VIEW -->
+  <section id="view-settings" class="view page" aria-label="Settings">
+    <header class="page-head"><h1>Settings</h1></header>
+
+    <div class="card">
+      <div class="label">Notifications</div>
+      <div class="setting"><span>Permission</span><button id="btn-notif" class="btn small">Enable</button></div>
+      <p id="notif-hint" class="hint"></p>
+      <div class="setting"><span>Send a test</span><button id="btn-test-notif" class="btn small">Test</button></div>
+    </div>
+
+    <div class="card">
+      <div class="label">Water fountain alerts</div>
+      <label class="setting col">
+        <span>Alert distance: <b id="alert-dist-val">30 m</b></span>
+        <input id="set-alert-dist" type="range" min="10" max="200" step="5">
+      </label>
+      <label class="setting"><span>Sound</span>
+        <select id="set-sound">
+          <option value="chime">Chime</option>
+          <option value="drip">Water drip</option>
+          <option value="bell">Bell</option>
+          <option value="beep">Double beep</option>
+          <option value="splash">Splash</option>
+          <option value="none">Silent</option>
+        </select>
+      </label>
+      <label class="setting col"><span>Volume</span><input id="set-volume" type="range" min="0" max="1" step="0.05"></label>
+      <div class="setting"><span>Preview sound</span><button id="btn-test-sound" class="btn small">Play</button></div>
+      <label class="setting"><span>Vibrate</span><input id="set-vibrate" type="checkbox" class="switch"></label>
+      <label class="setting"><span>Only alert during a run</span><input id="set-alert-run-only" type="checkbox" class="switch"></label>
+    </div>
+
+    <div class="card">
+      <div class="label">Tracking</div>
+      <label class="setting"><span>Auto-pause when stopped</span><input id="set-autopause" type="checkbox" class="switch"></label>
+      <label class="setting col"><span>Counts as stopped below <b id="pause-speed-val">3 km/h</b></span>
+        <input id="set-pause-speed" type="range" min="1" max="7" step="0.5"></label>
+      <label class="setting col"><span>…for at least <b id="pause-delay-val">6 s</b></span>
+        <input id="set-pause-delay" type="range" min="3" max="20" step="1"></label>
+      <label class="setting"><span>Keep screen on while running</span><input id="set-keepawake" type="checkbox" class="switch"></label>
+      <label class="setting"><span>Default pace for estimates</span>
+        <select id="set-default-pace">
+          <option value="270">4:30 /km</option><option value="300">5:00 /km</option><option value="330">5:30 /km</option>
+          <option value="360">6:00 /km</option><option value="420">7:00 /km</option><option value="480">8:00 /km</option>
+          <option value="720">12:00 /km (walk)</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="label">Friends</div>
+      <label class="setting col"><span>Your name (shown to friends)</span><input id="set-name" maxlength="30" placeholder="e.g. Sam"></label>
+      <label class="setting"><span>Share my runs with friends</span><input id="set-share" type="checkbox" class="switch"></label>
+      <label class="setting"><span>Progress updates during run</span>
+        <select id="set-share-every">
+          <option value="0">Off (start &amp; finish only)</option><option value="2">Every 2 min</option>
+          <option value="5">Every 5 min</option><option value="10">Every 10 min</option>
+        </select>
+      </label>
+      <label class="setting"><span>Notify me when friends run</span><input id="set-notify-friends" type="checkbox" class="switch"></label>
+    </div>
+
+    <div class="card">
+      <div class="label">About</div>
+      <p class="hint">Map © OpenStreetMap contributors. Fountains from OpenStreetMap (Overpass API), directions from OSRM (routing.openstreetmap.de), address search from Nominatim, friend messages relayed through ntfy.sh. Runs are stored only on this device.</p>
+      <p class="hint"><b>Tip:</b> install WaterBreak to your home screen (Share → Add to Home Screen on iPhone) for notifications and full-screen use. Browsers pause GPS when the screen is locked, so keep the screen on during runs.</p>
+      <button id="btn-clear" class="btn danger small">Delete all runs</button>
+    </div>
+  </section>
+
+  <nav class="tabbar" aria-label="Main">
+    <button data-view="run" class="active"><svg viewBox="0 0 24 24"><path d="M13.5 5.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM9.8 8.9 7 23h2.1l1.8-8 2.1 2v6h2v-7.5l-2.1-2 .6-3A7.3 7.3 0 0 0 19 13v-2c-1.9 0-3.5-1-4.3-2.4l-1-1.6c-.4-.6-1-1-1.7-1-.3 0-.5.1-.8.1L6 8.3V13h2V9.6l1.8-.7"/></svg><span>Run</span></button>
+    <button data-view="history"><svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"/></svg><span>Runs</span></button>
+    <button data-view="friends"><svg viewBox="0 0 24 24"><path d="M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm7 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM9 13c-3.3 0-7 1.6-7 4v3h14v-3c0-2.4-3.7-4-7-4zm7 0c-.5 0-1 0-1.5.1 1.5 1 2.5 2.3 2.5 3.9v3h5v-3c0-2.3-3.4-4-6-4z"/></svg><span>Friends</span><i id="friends-badge" class="badge hidden"></i></button>
+    <button data-view="settings"><svg viewBox="0 0 24 24"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.7c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z"/></svg><span>Settings</span></button>
+  </nav>
+</div>
+
+<!-- Destination picker -->
+<div id="dest-modal" class="modal hidden" role="dialog" aria-label="Choose destination">
+  <div class="modal-card">
+    <div class="modal-head"><h2>Where to?</h2><button class="icon-btn" data-close aria-label="Close">✕</button></div>
+    <form id="dest-search-form" class="row-form">
+      <input id="dest-search" placeholder="Search a place or address" autocomplete="off">
+      <button class="btn primary small" type="submit">Search</button>
+    </form>
+    <ul id="dest-results" class="results"></ul>
+    <button id="btn-pick-map" class="btn wide">📍 Tap a point on the map</button>
+    <button id="btn-pick-fountain" class="btn wide">💧 Nearest water fountain</button>
+  </div>
+</div>
+
+<!-- Run detail -->
+<div id="run-modal" class="modal hidden" role="dialog" aria-label="Run details">
+  <div class="modal-card tall">
+    <div class="modal-head"><h2 id="rd-title">Run</h2><button class="icon-btn" data-close aria-label="Close">✕</button></div>
+    <div id="rd-map" class="rd-map"></div>
+    <div id="rd-stats" class="rd-stats"></div>
+    <div class="rd-actions">
+      <button id="rd-gpx" class="btn small">Export GPX</button>
+      <button id="rd-delete" class="btn danger small">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div id="pick-banner" class="pick-banner hidden">Tap the map to set your destination <button id="btn-pick-cancel" class="btn small">Cancel</button></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="app.js"></script>
+</body>
+</html>
